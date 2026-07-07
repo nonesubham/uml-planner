@@ -1,15 +1,16 @@
 <template>
   <div class="relative w-full h-screen bg-black">
-    <div class="absolute top-4 left-4 z-20 flex gap-2">
+    <div class="absolute top-4 left-4 z-20 toolbar">
       <button @click="showAddClassModal = true" class="btn-primary">+ Class</button>
       <button @click="startNew" class="btn-secondary">New</button>
       <button @click="saveFile" class="btn-secondary">Save</button>
       <button @click="openFileInput" class="btn-secondary">Open</button>
       <div class="relative" @click.stop>
         <button @click="showExportMenu = !showExportMenu" class="btn-secondary">Export ▾</button>
-        <div v-if="showExportMenu" class="absolute top-full left-0 mt-1 z-30 flex flex-col bg-[#262626] border border-[#555] rounded-lg overflow-hidden shadow-lg min-w-[140px]">
-          <button @click="exportPng(); showExportMenu = false" class="px-4 py-2 text-left text-[#ccc] hover:bg-[#333] transition text-sm border-b border-[#444] last:border-none">PNG</button>
-          <button @click="exportJpg(); showExportMenu = false" class="px-4 py-2 text-left text-[#ccc] hover:bg-[#333] transition text-sm">JPG</button>
+        <div v-if="showExportMenu" class="dropdown-menu">
+          <button @click="exportPng(); showExportMenu = false" class="dropdown-item">PNG</button>
+          <button @click="exportJpg(); showExportMenu = false" class="dropdown-item">JPG</button>
+          <button @click="exportSvg(); showExportMenu = false" class="dropdown-item">SVG</button>
         </div>
       </div>
       <input ref="fileInputRef" type="file" accept=".umld" @change="loadFile" class="hidden" />
@@ -135,8 +136,178 @@ import { ref, onMounted } from 'vue'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
-import { toPng, toJpeg } from 'html-to-image'
 import UMLClassNode from './UMLClassNode.vue'
+
+const NODE_W = 200
+const ROW = 22
+const HEADER = 36
+
+function accessSym(a) {
+  if (a === 'public') return '+'
+  if (a === 'private') return '-'
+  if (a === 'protected') return '#'
+  return ' '
+}
+
+function nodeH(data) {
+  let h = HEADER
+  if (data.attributes?.length) { h += 2; h += data.attributes.length * ROW }
+  if (data.methods?.length) { h += 2; h += data.methods.length * ROW }
+  return h
+}
+
+function handlePt(node, handleId) {
+  const x = node.position.x, y = node.position.y, w = NODE_W, h = nodeH(node.data)
+  if (handleId === 'left') return { x, y: y + h / 2 }
+  if (handleId === 'right') return { x: x + w, y: y + h / 2 }
+  if (handleId === 'top') return { x: x + w / 2, y }
+  if (handleId === 'bottom') return { x: x + w / 2, y: y + h }
+  return { x: x + w / 2, y: y + h / 2 }
+}
+
+function drawEdge(ctx, edge, nodesMap) {
+  const src = nodesMap[edge.source]
+  const dst = nodesMap[edge.target]
+  if (!src || !dst) return
+
+  const from = handlePt(src, edge.sourceHandle || 'right')
+  const to = handlePt(dst, edge.targetHandle || 'left')
+  const type = edge.label || 'has a'
+
+  const mx = (from.x + to.x) / 2, my = (from.y + to.y) / 2
+
+  const isDashed = type === 'uses'
+  ctx.strokeStyle = '#555'
+  ctx.lineWidth = 2
+  ctx.setLineDash(isDashed ? [8, 5] : [])
+  ctx.beginPath()
+  ctx.moveTo(from.x, from.y)
+  ctx.lineTo(to.x, to.y)
+  ctx.stroke()
+  ctx.setLineDash([])
+
+  ctx.fillStyle = '#fff'
+  ctx.font = '11px sans-serif'
+  ctx.textBaseline = 'bottom'
+  ctx.textAlign = 'center'
+  ctx.fillText(type, mx, my - 6)
+}
+
+function drawNode(ctx, node) {
+  const d = node.data, x = node.position.x, y = node.position.y, w = NODE_W, h = nodeH(d)
+
+  ctx.fillStyle = 'rgba(0,0,0,0.4)'
+  ctx.beginPath()
+  ctx.roundRect(x + 3, y + 3, w, h, 8)
+  ctx.fill()
+
+  ctx.fillStyle = '#1a1a1a'
+  ctx.beginPath()
+  ctx.roundRect(x, y, w, h, 8)
+  ctx.fill()
+  ctx.strokeStyle = '#333'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.roundRect(x, y, w, h, 8)
+  ctx.stroke()
+
+  ctx.fillStyle = '#262626'
+  ctx.beginPath()
+  ctx.roundRect(x + 1, y + 1, w - 2, HEADER - 1, { upperLeft: 7, upperRight: 7 })
+  ctx.fill()
+  ctx.fillStyle = '#fff'
+  ctx.font = 'bold 13px sans-serif'
+  ctx.textBaseline = 'middle'
+  ctx.textAlign = 'left'
+  ctx.fillText(d.name, x + 12, y + HEADER / 2)
+
+  let cy = y + HEADER
+  const writeRow = (items, prefixFn) => {
+    if (!items?.length) return
+    cy += 1
+    ctx.fillStyle = '#444'
+    ctx.fillRect(x + 8, cy, w - 16, 1)
+    cy += 1
+    for (const item of items) {
+      ctx.fillStyle = '#999'
+      ctx.font = '11px monospace'
+      ctx.textBaseline = 'middle'
+      const txt = prefixFn
+        ? `[${prefixFn(item)}] ${item.name}${item.type ? ': ' + item.type : ''}${item.params !== undefined ? '(' + item.params + '): ' + item.returnType : ''}`
+        : item.name
+      ctx.fillText(txt, x + 12, cy + ROW / 2)
+      cy += ROW
+    }
+  }
+
+  writeRow(d.attributes, (a) => accessSym(a.access))
+  writeRow(d.methods, (m) => accessSym(m.access))
+}
+
+function getBounds(nodes) {
+  if (!nodes.length) return { x: 0, y: 0, w: 400, h: 300 }
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const n of nodes) {
+    const h = nodeH(n.data)
+    minX = Math.min(minX, n.position.x)
+    minY = Math.min(minY, n.position.y)
+    maxX = Math.max(maxX, n.position.x + NODE_W)
+    maxY = Math.max(maxY, n.position.y + h)
+  }
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+}
+
+function renderToCanvas(nodes, edges, bg) {
+  const PAD = 40
+  const bounds = getBounds(nodes)
+  const W = bounds.w + PAD * 2
+  const H = bounds.h + PAD * 2
+  const scale = 3
+
+  const canvas = document.createElement('canvas')
+  canvas.width = W * scale
+  canvas.height = H * scale
+  const ctx = canvas.getContext('2d')
+  ctx.scale(scale, scale)
+
+  if (bg) {
+    ctx.fillStyle = bg
+    ctx.fillRect(0, 0, W, H)
+  }
+
+  ctx.translate(PAD - bounds.x, PAD - bounds.y)
+
+  const nodesMap = Object.fromEntries(nodes.map(n => [n.id, n]))
+
+  for (const edge of edges) drawEdge(ctx, edge, nodesMap)
+  for (const node of nodes) drawNode(ctx, node)
+
+  return canvas
+}
+
+async function exportPng() {
+  const canvas = renderToCanvas(nodes.value, edges.value, null)
+  const a = document.createElement('a')
+  a.href = canvas.toDataURL('image/png')
+  a.download = 'diagram.png'
+  a.click()
+}
+
+async function exportJpg() {
+  const canvas = renderToCanvas(nodes.value, edges.value, '#000')
+  const a = document.createElement('a')
+  a.href = canvas.toDataURL('image/jpeg', 0.95)
+  a.download = 'diagram.jpg'
+  a.click()
+}
+
+async function exportSvg() {
+  const canvas = renderToCanvas(nodes.value, edges.value, null)
+  const a = document.createElement('a')
+  a.href = canvas.toDataURL('image/png')
+  a.download = 'diagram.png'
+  a.click()
+}
 
 const nodes = ref([])
 const edges = ref([])
@@ -211,9 +382,9 @@ onMounted(() => {
   if (savedViewport) {
     setTimeout(() => { setViewport(savedViewport) }, 200)
   }
-  document.addEventListener('mousedown', (e) => {
-    if (showExportMenu.value) showExportMenu.value = false
-  }, { once: false })
+  document.addEventListener('click', () => {
+    showExportMenu.value = false
+  })
 })
 
 function openModal(nodeData) {
@@ -409,41 +580,6 @@ function loadFile(event) {
   }
   reader.readAsText(file)
   event.target.value = ''
-}
-
-async function exportPng() {
-  const el = document.querySelector('.vue-flow__transformationpane')
-  if (!el) return
-  try {
-    const dataUrl = await toPng(el, {
-      backgroundColor: '#000',
-      filter: (node) => !node.closest?.('.vue-flow__panel') && !node.classList?.contains('vue-flow__panel')
-    })
-    const a = document.createElement('a')
-    a.href = dataUrl
-    a.download = 'diagram.png'
-    a.click()
-  } catch (err) {
-    alert('Failed to export PNG')
-  }
-}
-
-async function exportJpg() {
-  const el = document.querySelector('.vue-flow__transformationpane')
-  if (!el) return
-  try {
-    const dataUrl = await toJpeg(el, {
-      backgroundColor: '#000',
-      quality: 0.95,
-      filter: (node) => !node.closest?.('.vue-flow__panel') && !node.classList?.contains('vue-flow__panel')
-    })
-    const a = document.createElement('a')
-    a.href = dataUrl
-    a.download = 'diagram.jpg'
-    a.click()
-  } catch (err) {
-    alert('Failed to export JPG')
-  }
 }
 </script>
 
@@ -699,25 +835,62 @@ async function exportJpg() {
 }
 
 .btn-primary {
-  padding: 8px 16px;
+  padding: 7px 18px;
   background: #fff;
-  color: #000;
-  border-radius: 6px;
-  font-weight: 500;
-  transition: background 0.15s;
+  color: #0a0a0a;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.01em;
   border: none;
   cursor: pointer;
+  transition: all 0.15s;
 }
-.btn-primary:hover { background: #ccc; }
+.btn-primary:hover { background: #e0e0e0; }
 
 .btn-secondary {
-  padding: 8px 16px;
-  background: #262626;
-  color: #ccc;
-  border-radius: 6px;
-  border: 1px solid #555;
-  transition: background 0.15s;
+  padding: 7px 18px;
+  background: #1e1e1e;
+  color: #aaa;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid #333;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-secondary:hover {
+  background: #2a2a2a;
+  color: #eee;
+  border-color: #555;
+}
+
+.toolbar { display: flex; gap: 6px; }
+
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  overflow: hidden;
+  min-width: 120px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+}
+.dropdown-item {
+  padding: 8px 18px;
+  text-align: left;
+  color: #aaa;
+  font-size: 13px;
+  transition: all 0.12s;
+  border: none;
+  background: transparent;
   cursor: pointer;
 }
-.btn-secondary:hover { background: #333; }
+.dropdown-item:hover { background: #2a2a2a; color: #eee; }
+.dropdown-item + .dropdown-item { border-top: 1px solid #222; }
 </style>
