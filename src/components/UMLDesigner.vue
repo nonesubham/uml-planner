@@ -34,6 +34,7 @@
 
       <Background :gap="20" :pattern-color="'#333'" :size="2" />
       <Controls show-zoom show-fit-view />
+      <div class="zoom-level">{{ Math.round(viewport.zoom * 100) }}%</div>
     </VueFlow>
 
     <div v-if="showRelationModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
@@ -81,40 +82,40 @@
 
             <div class="mb-6">
               <label class="block text-sm font-medium text-gray-300 mb-2">Attributes (name: type):</label>
-              <div v-for="(attr, i) in form.attributes" :key="i" class="flex items-center gap-2 mb-2">
+              <div v-for="(attr, i) in form.attributes" :key="i" class="flex items-center gap-1 mb-1.5">
                 <select v-model="attr.access"
-                  class="w-20 px-1 py-1 bg-black text-white border border-gray-600 rounded text-sm focus:ring-2 focus:ring-white focus:border-white">
+                  class="w-14 shrink-0 px-1 py-1 bg-black text-white border border-gray-600 rounded text-xs focus:ring-2 focus:ring-white focus:border-white">
                   <option value="public">+</option><option value="private">-</option><option value="protected">#</option>
                 </select>
                 <input v-model="attr.name" type="text" placeholder="name"
-                  class="flex-1 px-2 py-1 bg-black text-white border border-gray-600 rounded focus:ring-2 focus:ring-white focus:border-white placeholder-gray-500">
-                <span class="text-gray-400">:</span>
+                  class="min-w-0 flex-1 w-0 px-1.5 py-1 bg-black text-white border border-gray-600 rounded text-xs focus:ring-2 focus:ring-white focus:border-white placeholder-gray-500">
+                <span class="text-gray-400 shrink-0 text-xs">:</span>
                 <input v-model="attr.type" type="text" placeholder="type"
-                  class="flex-1 px-2 py-1 bg-black text-white border border-gray-600 rounded focus:ring-2 focus:ring-white focus:border-white placeholder-gray-500">
+                  class="min-w-0 flex-1 w-0 px-1.5 py-1 bg-black text-white border border-gray-600 rounded text-xs focus:ring-2 focus:ring-white focus:border-white placeholder-gray-500">
                 <button type="button" @click="form.attributes.splice(i, 1)"
-                  class="px-2 py-1 bg-white text-black h-8 w-8 flex items-center justify-center text-sm rounded hover:bg-gray-300">×</button>
+                  class="shrink-0 bg-white text-black h-6 w-6 flex items-center justify-center text-xs rounded hover:bg-gray-300">×</button>
               </div>
               <button type="button" @click="form.attributes.push({ name: '', type: '', access: 'private' })"
-                class="btn-secondary">+ Add Attribute</button>
+                class="btn-secondary mt-1">+ Add Attribute</button>
             </div>
 
             <div class="mb-6">
               <label class="block text-sm font-medium text-gray-300 mb-2">Methods (name(params): returnType):</label>
-              <div v-for="(method, i) in form.methods" :key="i" class="flex items-center gap-2 mb-2">
+              <div v-for="(method, i) in form.methods" :key="i" class="flex items-center gap-1 mb-1.5">
                 <select v-model="method.access"
-                  class="w-20 px-1 py-1 bg-black text-white border border-gray-600 rounded text-sm focus:ring-2 focus:ring-white focus:border-white">
+                  class="w-14 shrink-0 px-1 py-1 bg-black text-white border border-gray-600 rounded text-xs focus:ring-2 focus:ring-white focus:border-white">
                   <option value="public">+</option><option value="private">-</option><option value="protected">#</option>
                 </select>
                 <input v-model="method.name" type="text" placeholder="name"
-                  class="flex-1 px-2 py-1 bg-black text-white border border-gray-600 rounded focus:ring-2 focus:ring-white focus:border-white placeholder-gray-500">
-                <span class="text-gray-400">(</span>
+                  class="min-w-0 flex-1 w-0 px-1.5 py-1 bg-black text-white border border-gray-600 rounded text-xs focus:ring-2 focus:ring-white focus:border-white placeholder-gray-500">
+                <span class="text-gray-400 shrink-0 text-xs">(</span>
                 <input v-model="method.params" type="text" placeholder="params"
-                  class="flex-1 px-2 py-1 bg-black text-white border border-gray-600 rounded focus:ring-2 focus:ring-white focus:border-white placeholder-gray-500">
-                <span class="text-gray-400">):</span>
-                <input v-model="method.returnType" type="text" placeholder="returnType"
-                  class="flex-1 px-2 py-1 bg-black text-white border border-gray-600 rounded focus:ring-2 focus:ring-white focus:border-white placeholder-gray-500">
+                  class="min-w-0 flex-1 w-0 px-1.5 py-1 bg-black text-white border border-gray-600 rounded text-xs focus:ring-2 focus:ring-white focus:border-white placeholder-gray-500">
+                <span class="text-gray-400 shrink-0 text-xs">):</span>
+                <input v-model="method.returnType" type="text" placeholder="type"
+                  class="min-w-0 flex-1 w-0 px-1.5 py-1 bg-black text-white border border-gray-600 rounded text-xs focus:ring-2 focus:ring-white focus:border-white placeholder-gray-500">
                 <button type="button" @click="form.methods.splice(i, 1)"
-                  class="px-2 py-1 bg-white text-black h-8 w-8 flex items-center justify-center text-sm rounded hover:bg-gray-300">×</button>
+                  class="shrink-0 bg-white text-black h-6 w-6 flex items-center justify-center text-xs rounded hover:bg-gray-300">×</button>
               </div>
               <button type="button" @click="form.methods.push({ name: '', params: '', returnType: '', access: 'public' })"
                 class="btn-secondary">+ Add Method</button>
@@ -893,4 +894,20 @@ function loadFile(event) {
 }
 .dropdown-item:hover { background: #2a2a2a; color: #eee; }
 .dropdown-item + .dropdown-item { border-top: 1px solid #222; }
+
+.zoom-level {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  z-index: 10;
+  background: #1a1a1a;
+  color: #888;
+  font-size: 11px;
+  font-family: monospace;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid #333;
+  pointer-events: none;
+  user-select: none;
+}
 </style>
