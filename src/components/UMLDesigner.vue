@@ -5,8 +5,13 @@
       <button @click="startNew" class="btn-secondary">New</button>
       <button @click="saveFile" class="btn-secondary">Save</button>
       <button @click="openFileInput" class="btn-secondary">Open</button>
-      <button @click="exportPng" class="btn-secondary">PNG</button>
-      <button @click="exportJpg" class="btn-secondary">JPG</button>
+      <div class="relative" @click.stop>
+        <button @click="showExportMenu = !showExportMenu" class="btn-secondary">Export ▾</button>
+        <div v-if="showExportMenu" class="absolute top-full left-0 mt-1 z-30 flex flex-col bg-[#262626] border border-[#555] rounded-lg overflow-hidden shadow-lg min-w-[140px]">
+          <button @click="exportPng(); showExportMenu = false" class="px-4 py-2 text-left text-[#ccc] hover:bg-[#333] transition text-sm border-b border-[#444] last:border-none">PNG</button>
+          <button @click="exportJpg(); showExportMenu = false" class="px-4 py-2 text-left text-[#ccc] hover:bg-[#333] transition text-sm">JPG</button>
+        </div>
+      </div>
       <input ref="fileInputRef" type="file" accept=".umld" @change="loadFile" class="hidden" />
     </div>
 
@@ -137,6 +142,7 @@ const nodes = ref([])
 const edges = ref([])
 const showAddClassModal = ref(false)
 const showRelationModal = ref(false)
+const showExportMenu = ref(false)
 const editingNodeId = ref(null)
 const editingEdgeId = ref(null)
 const pendingConnection = ref(null)
@@ -205,6 +211,9 @@ onMounted(() => {
   if (savedViewport) {
     setTimeout(() => { setViewport(savedViewport) }, 200)
   }
+  document.addEventListener('mousedown', (e) => {
+    if (showExportMenu.value) showExportMenu.value = false
+  }, { once: false })
 })
 
 function openModal(nodeData) {
@@ -423,7 +432,7 @@ async function exportJpg() {
   const el = document.querySelector('.vue-flow__transformationpane')
   if (!el) return
   try {
-    const dataUrl = await toJpg(el, {
+    const dataUrl = await toJpeg(el, {
       backgroundColor: '#000',
       quality: 0.95,
       filter: (node) => !node.closest?.('.vue-flow__panel') && !node.classList?.contains('vue-flow__panel')
