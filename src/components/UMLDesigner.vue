@@ -3,7 +3,7 @@
     <div class="absolute top-4 left-4 z-20 toolbar">
       <button @click="showAddClassModal = true" class="btn-primary">+ Class</button>
       <button @click="startNew" class="btn-secondary">New</button>
-      <button @click="saveFile" class="btn-secondary">Save</button>
+      <button @click="saveFile" class="btn-secondary" :disabled="!nodes.length && !edges.length">Save</button>
       <button @click="openFileInput" class="btn-secondary">Open</button>
       <div class="relative" @click.stop>
         <button @click="showExportMenu = !showExportMenu" class="btn-secondary">Export ▾</button>
@@ -29,14 +29,27 @@
       @move="onMove"
       @node-context-menu="onNodeContextMenu"
       @pane-context-menu="onPaneContextMenu"
+      @edge-context-menu="onEdgeContextMenu"
+      :default-edge-options="defaultEdgeOptions"
       class="vue-flow-custom"
     >
       <template #node-uml-class="nodeProps">
         <UMLClassNode v-bind="nodeProps" @delete="deleteNode(nodeProps.id)" />
       </template>
+      <template #edge-uml-edge="edgeProps">
+        <UMLClassEdge v-bind="edgeProps" />
+      </template>
+
 
       <Background :gap="20" :pattern-color="'#333'" :size="2" />
-      <Controls show-zoom show-fit-view />
+      <Controls show-zoom show-fit-view>
+        <button @click="showArrowheads = !showArrowheads" class="ctrl-btn" :class="{ active: showArrowheads }" title="Toggle arrow heads">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M2 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <path d="M10 5l3 3-3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </Controls>
       <div class="zoom-level">{{ Math.round(viewport.zoom * 100) }}%</div>
     </VueFlow>
 
@@ -44,6 +57,11 @@
       <div class="bg-neutral-900 rounded-lg shadow-2xl w-80 max-w-full mx-4 border border-gray-700">
         <div class="p-6">
           <h2 class="text-lg font-bold text-white mb-4">{{ editingEdgeId ? 'Change Relation Type' : 'Relation Type' }}</h2>
+          <div class="mb-4">
+            <label class="block text-sm font-medium text-gray-300 mb-2">Custom Label (optional):</label>
+            <input v-model="customEdgeLabel" type="text" placeholder="e.g. communicates with"
+              class="w-full px-3 py-2 bg-black text-white border border-gray-600 rounded focus:ring-2 focus:ring-white focus:border-white placeholder-gray-500 text-sm" />
+          </div>
           <div class="flex flex-col gap-2">
             <button v-for="type in relationTypes" :key="type.value" @click="confirmRelation(type.value)"
               class="flex items-center gap-3 px-4 py-3 bg-black text-white border border-gray-600 rounded hover:border-white transition-colors text-left">
@@ -138,36 +156,51 @@
       :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
       @click.stop
     >
-      <button
-        @click="copySelected()"
-        class="context-item"
-        :disabled="!contextMenu.node"
-      >Copy</button>
-      <button
-        @click="pasteNodes()"
-        class="context-item"
-        :disabled="!copiedNodes"
-      >Paste</button>
-      <button
-        @click="editNodeFromMenu()"
-        class="context-item"
-        :disabled="!contextMenu.node"
-      >Edit</button>
-      <button
-        @click="deleteSelected()"
-        class="context-item danger"
-        :disabled="!contextMenu.node"
-      >Delete</button>
+      <template v-if="contextMenu.edge">
+        <div class="context-label">Line Style</div>
+        <button
+          v-for="t in relationTypes" :key="t.value"
+          @click="changeEdgeType(t.value)"
+          class="context-item"
+          :class="{ active: contextMenu.edge.label === t.label }"
+        >{{ t.symbol }} {{ t.label }}</button>
+        <div class="context-divider"></div>
+        <button @click="editEdgeLabel()" class="context-item">Edit Label</button>
+        <button @click="deleteEdge(contextMenu.edge.id)" class="context-item danger">Delete</button>
+      </template>
+      <template v-else>
+        <button
+          @click="copySelected()"
+          class="context-item"
+          :disabled="!contextMenu.node"
+        >Copy</button>
+        <button
+          @click="pasteNodes()"
+          class="context-item"
+          :disabled="!copiedNodes"
+        >Paste</button>
+        <button
+          @click="editNodeFromMenu()"
+          class="context-item"
+          :disabled="!contextMenu.node"
+        >Edit</button>
+        <button
+          @click="deleteSelected()"
+          class="context-item danger"
+          :disabled="!contextMenu.node"
+        >Delete</button>
+      </template>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, nextTick, provide } from 'vue'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import UMLClassNode from './UMLClassNode.vue'
+import UMLClassEdge from './UMLClassEdge.vue'
 
 const NODE_W = 200
 const ROW = 22
@@ -196,6 +229,45 @@ function handlePt(node, handleId) {
   return { x: x + w / 2, y: y + h / 2 }
 }
 
+function angle(a, b) {
+  return Math.atan2(b.y - a.y, b.x - a.x)
+}
+
+function drawArrow(ctx, x, y, ang, size) {
+  ctx.beginPath()
+  ctx.moveTo(x, y)
+  ctx.lineTo(x - size * Math.cos(ang - 0.4), y - size * Math.sin(ang - 0.4))
+  ctx.lineTo(x - size * Math.cos(ang + 0.4), y - size * Math.sin(ang + 0.4))
+  ctx.closePath()
+  ctx.fill()
+}
+
+function drawHollowTriangle(ctx, x, y, ang, size) {
+  ctx.beginPath()
+  ctx.moveTo(x, y)
+  ctx.lineTo(x - size * Math.cos(ang - 0.5), y - size * Math.sin(ang - 0.5))
+  ctx.lineTo(x - size * Math.cos(ang), y - size * Math.sin(ang) - size * 0.5)
+  ctx.lineTo(x - size * Math.cos(ang + 0.5), y - size * Math.sin(ang + 0.5))
+  ctx.closePath()
+  ctx.stroke()
+}
+
+function drawDiamond(ctx, x, y, ang, size, fill) {
+  ctx.beginPath()
+  ctx.moveTo(x, y)
+  ctx.lineTo(x - size * Math.cos(ang - 0.6), y - size * Math.sin(ang - 0.6))
+  ctx.lineTo(x - 2 * size * Math.cos(ang), y - 2 * size * Math.sin(ang))
+  ctx.lineTo(x - size * Math.cos(ang + 0.6), y - size * Math.sin(ang + 0.6))
+  ctx.closePath()
+  if (fill) ctx.fill()
+  ctx.stroke()
+}
+
+function edgeTypeVal(label) {
+  const entry = relationTypes.find(r => r.label === label)
+  return entry ? entry.value : 'association'
+}
+
 function drawEdge(ctx, edge, nodesMap) {
   const src = nodesMap[edge.source]
   const dst = nodesMap[edge.target]
@@ -203,12 +275,15 @@ function drawEdge(ctx, edge, nodesMap) {
 
   const from = handlePt(src, edge.sourceHandle || 'right')
   const to = handlePt(dst, edge.targetHandle || 'left')
-  const type = edge.label || 'has a'
+  const label = edge.label || 'has a'
+  const typeVal = edgeTypeVal(label)
 
   const mx = (from.x + to.x) / 2, my = (from.y + to.y) / 2
+  const ang = angle(from, to)
+  const isDashed = typeVal === 'dependency'
 
-  const isDashed = type === 'uses'
   ctx.strokeStyle = '#555'
+  ctx.fillStyle = '#555'
   ctx.lineWidth = 2
   ctx.setLineDash(isDashed ? [8, 5] : [])
   ctx.beginPath()
@@ -217,11 +292,18 @@ function drawEdge(ctx, edge, nodesMap) {
   ctx.stroke()
   ctx.setLineDash([])
 
+  if (showArrowheads.value) {
+    if (typeVal === 'inheritance') drawHollowTriangle(ctx, to.x, to.y, ang, 10)
+    else if (typeVal === 'composition') drawDiamond(ctx, from.x, from.y, ang, 5, true)
+    else if (typeVal === 'aggregation') drawDiamond(ctx, from.x, from.y, ang, 5, false)
+    else if (typeVal === 'dependency' || typeVal === 'association') drawArrow(ctx, to.x, to.y, ang, 8)
+  }
+
   ctx.fillStyle = '#fff'
   ctx.font = '11px sans-serif'
   ctx.textBaseline = 'bottom'
   ctx.textAlign = 'center'
-  ctx.fillText(type, mx, my - 6)
+  ctx.fillText(label, mx, my - 6)
 }
 
 function drawNode(ctx, node) {
@@ -351,6 +433,13 @@ const pendingConnection = ref(null)
 const fileInputRef = ref(null)
 const contextMenu = ref(null)
 const copiedNodes = ref(null)
+const showArrowheads = ref(true)
+provide('showArrowheads', showArrowheads)
+provide('edges', edges)
+
+const defaultEdgeOptions = { type: 'uml-edge' }
+
+const customEdgeLabel = ref('')
 
 const relationTypes = [
   { value: 'association', symbol: '───', label: 'has a', desc: 'Association' },
@@ -388,11 +477,13 @@ function save() {
     edges: edges.value.map(e => ({
       id: e.id, source: e.source, target: e.target,
       sourceHandle: e.sourceHandle, targetHandle: e.targetHandle,
-      label: e.label, animated: e.animated
+      label: e.label, animated: e.animated, style: e.style
     })),
     viewport: viewport.value
   }))
 }
+
+
 
 function load() {
   try {
@@ -401,7 +492,10 @@ function load() {
     const data = JSON.parse(raw)
     if (!data.nodes?.length) return
     nodes.value = data.nodes
-    edges.value = data.edges || []
+    edges.value = (data.edges || []).map(e => {
+      const typeEntry = relationTypes.find(r => r.label === e.label)
+      return { ...e, ...edgeStyleForType(typeEntry ? typeEntry.value : 'association') }
+    })
     idCounter = Math.max(...data.nodes.map(n => parseInt(n.id.replace('node_', '')) || 0))
     savedViewport = data.viewport || null
   } catch {}
@@ -410,6 +504,8 @@ function load() {
 load()
 
 const { screenToFlowCoordinate, viewport, setViewport, addSelectedNodes, getSelectedNodes } = useVueFlow()
+
+
 
 onMounted(async () => {
   if (savedViewport) {
@@ -529,14 +625,34 @@ function onConnect(connection) {
   showRelationModal.value = true
 }
 
+function edgeMarker(typeVal) {
+  const map = {
+    association: { markerEnd: 'arrowclosed' },
+    inheritance: { markerEnd: 'inheritance' },
+    composition: { markerStart: 'composition' },
+    aggregation: { markerStart: 'aggregation' },
+    dependency: { markerEnd: 'arrow' },
+  }
+  return map[typeVal] || {}
+}
+
+function edgeStyleForType(typeVal) {
+  const isDashed = typeVal === 'dependency'
+  return {
+    animated: isDashed,
+    style: { stroke: '#666', ...(isDashed ? { strokeDasharray: '8 5' } : {}) },
+    ...edgeMarker(typeVal),
+  }
+}
+
 function confirmRelation(type) {
   const typeDef = relationTypes.find(r => r.value === type)
+  const label = customEdgeLabel.value.trim() || (typeDef ? typeDef.label : type)
   const edgeProps = {
-    label: typeDef ? typeDef.label : type,
+    label,
     labelBgPadding: [6, 3],
     labelBgBorderRadius: 4,
-    animated: true,
-    style: { stroke: '#666' }
+    ...edgeStyleForType(type)
   }
 
   if (editingEdgeId.value) {
@@ -556,6 +672,7 @@ function confirmRelation(type) {
 
   pendingConnection.value = null
   showRelationModal.value = false
+  customEdgeLabel.value = ''
   save()
 }
 
@@ -563,6 +680,7 @@ function cancelRelation() {
   pendingConnection.value = null
   editingEdgeId.value = null
   showRelationModal.value = false
+  customEdgeLabel.value = ''
 }
 
 function onNodeDoubleClick(payload) {
@@ -571,6 +689,7 @@ function onNodeDoubleClick(payload) {
 
 function onEdgeDoubleClick(payload) {
   editingEdgeId.value = payload.edge.id
+  customEdgeLabel.value = ''
   showRelationModal.value = true
 }
 
@@ -600,7 +719,8 @@ function getDiagramData() {
       sourceHandle: e.sourceHandle,
       targetHandle: e.targetHandle,
       label: e.label,
-      animated: e.animated
+      animated: e.animated,
+      style: e.style
     }))
   }
 }
@@ -629,7 +749,10 @@ function loadFile(event) {
       const data = JSON.parse(e.target.result)
       if (!data.nodes) throw new Error('Invalid file')
       nodes.value = data.nodes
-      edges.value = data.edges || []
+      edges.value = (data.edges || []).map(e => {
+        const typeEntry = relationTypes.find(r => r.label === e.label)
+        return { ...e, ...edgeStyleForType(typeEntry ? typeEntry.value : 'association') }
+      })
       if (data.nodes.length > 0) {
         idCounter = Math.max(...data.nodes.map(n => parseInt(n.id.replace('node_', '')) || 0))
       }
@@ -650,6 +773,34 @@ function onNodeContextMenu({ node, event }) {
 function onPaneContextMenu(event) {
   event.preventDefault()
   contextMenu.value = { x: event.clientX, y: event.clientY, node: null }
+}
+
+function onEdgeContextMenu({ edge, event }) {
+  event.preventDefault()
+  contextMenu.value = { x: event.clientX, y: event.clientY, edge }
+}
+
+function changeEdgeType(type) {
+  const typeDef = relationTypes.find(r => r.value === type)
+  if (!typeDef || !contextMenu.value?.edge) return
+  const edgeId = contextMenu.value.edge.id
+  edges.value = edges.value.map(e => e.id === edgeId ? { ...e, label: typeDef.label, ...edgeStyleForType(type) } : e)
+  contextMenu.value = null
+  save()
+}
+
+function editEdgeLabel() {
+  if (!contextMenu.value?.edge) return
+  editingEdgeId.value = contextMenu.value.edge.id
+  customEdgeLabel.value = ''
+  showRelationModal.value = true
+  contextMenu.value = null
+}
+
+function deleteEdge(id) {
+  edges.value = edges.value.filter(e => e.id !== id)
+  contextMenu.value = null
+  save()
 }
 
 function copySelected() {
@@ -983,10 +1134,19 @@ function editNodeFromMenu() {
   cursor: pointer;
   transition: all 0.15s;
 }
-.btn-secondary:hover {
+.btn-secondary:hover:not(:disabled) {
   background: #2a2a2a;
   color: #eee;
   border-color: #555;
+}
+.btn-secondary:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.btn-secondary.active {
+  background: #333;
+  color: #fff;
+  border-color: #666;
 }
 
 .toolbar { display: flex; gap: 6px; }
@@ -1034,6 +1194,14 @@ function editNodeFromMenu() {
   user-select: none;
 }
 
+.vue-flow__controls .ctrl-btn { color: #666; }
+.vue-flow__controls .ctrl-btn:hover { color: #fff; }
+.vue-flow__controls .ctrl-btn.active {
+  background: #444;
+  color: #fff;
+}
+
+
 .context-menu {
   position: fixed;
   z-index: 100;
@@ -1070,5 +1238,21 @@ function editNodeFromMenu() {
 .context-item.danger:hover {
   background: #3a1a1a;
   color: #f66;
+}
+.context-item.active {
+  color: #fff;
+  background: #333;
+}
+.context-label {
+  padding: 4px 14px 2px;
+  font-size: 11px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.context-divider {
+  height: 1px;
+  background: #333;
+  margin: 4px 0;
 }
 </style>
