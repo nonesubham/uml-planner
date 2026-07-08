@@ -26,6 +26,9 @@
       :min-zoom="0.1"
       :max-zoom="4"
       :zoom-on-double-click="false"
+      @move="onMove"
+      @node-context-menu="onNodeContextMenu"
+      @pane-context-menu="onPaneContextMenu"
       class="vue-flow-custom"
     >
       <template #node-uml-class="nodeProps">
@@ -129,11 +132,38 @@
         </div>
       </div>
     </div>
+    <div
+      v-if="contextMenu"
+      class="context-menu"
+      :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+      @click.stop
+    >
+      <button
+        @click="copySelected()"
+        class="context-item"
+        :disabled="!contextMenu.node"
+      >Copy</button>
+      <button
+        @click="pasteNodes()"
+        class="context-item"
+        :disabled="!copiedNodes"
+      >Paste</button>
+      <button
+        @click="editNodeFromMenu()"
+        class="context-item"
+        :disabled="!contextMenu.node"
+      >Edit</button>
+      <button
+        @click="deleteSelected()"
+        class="context-item danger"
+        :disabled="!contextMenu.node"
+      >Delete</button>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
@@ -319,6 +349,8 @@ const editingNodeId = ref(null)
 const editingEdgeId = ref(null)
 const pendingConnection = ref(null)
 const fileInputRef = ref(null)
+const contextMenu = ref(null)
+const copiedNodes = ref(null)
 
 const relationTypes = [
   { value: 'association', symbol: '───', label: 'has a', desc: 'Association' },
@@ -377,15 +409,38 @@ function load() {
 
 load()
 
-const { screenToFlowCoordinate, viewport, setViewport } = useVueFlow()
+const { screenToFlowCoordinate, viewport, setViewport, addSelectedNodes, getSelectedNodes } = useVueFlow()
 
-onMounted(() => {
+onMounted(async () => {
   if (savedViewport) {
-    setTimeout(() => { setViewport(savedViewport) }, 200)
+    await nextTick()
+    setViewport(savedViewport)
   }
   document.addEventListener('click', () => {
     showExportMenu.value = false
+    contextMenu.value = null
   })
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+      e.preventDefault()
+      addSelectedNodes(nodes.value)
+      contextMenu.value = null
+    }
+    if (e.key === 'Escape') {
+      contextMenu.value = null
+    }
+    if ((e.key === 'Delete' || e.key === 'Del') && !showAddClassModal.value && !showRelationModal.value) {
+      const selected = getSelectedNodes.value
+      if (selected.length) {
+        e.preventDefault()
+        const ids = selected.map(n => n.id)
+        edges.value = edges.value.filter(ed => !ids.includes(ed.source) && !ids.includes(ed.target))
+        nodes.value = nodes.value.filter(n => !ids.includes(n.id))
+        contextMenu.value = null
+        save()
+      }
+    }
+  }, { capture: true })
 })
 
 function openModal(nodeData) {
@@ -421,6 +476,10 @@ function onNodeDragStop(dragEvent) {
   if (node) {
     node.position = { x: dragged.position.x, y: dragged.position.y }
   }
+  save()
+}
+
+function onMove() {
   save()
 }
 
@@ -581,6 +640,70 @@ function loadFile(event) {
   }
   reader.readAsText(file)
   event.target.value = ''
+}
+
+function onNodeContextMenu({ node, event }) {
+  event.preventDefault()
+  contextMenu.value = { x: event.clientX, y: event.clientY, node }
+}
+
+function onPaneContextMenu(event) {
+  event.preventDefault()
+  contextMenu.value = { x: event.clientX, y: event.clientY, node: null }
+}
+
+function copySelected() {
+  const selected = getSelectedNodes.value
+  if (selected.length === 0 && contextMenu.value?.node) {
+    copiedNodes.value = [JSON.parse(JSON.stringify(contextMenu.value.node))]
+  } else if (selected.length > 0) {
+    copiedNodes.value = selected.map(n => JSON.parse(JSON.stringify(n)))
+  }
+  contextMenu.value = null
+}
+
+function deleteSelected() {
+  let ids
+  const selected = getSelectedNodes.value
+  if (contextMenu.value?.node && !selected.some(n => n.id === contextMenu.value.node.id)) {
+    ids = [contextMenu.value.node.id]
+  } else {
+    ids = selected.map(n => n.id)
+  }
+  if (ids.length === 0 && contextMenu.value?.node) {
+    ids = [contextMenu.value.node.id]
+  }
+  edges.value = edges.value.filter(e => !ids.includes(e.source) && !ids.includes(e.target))
+  nodes.value = nodes.value.filter(n => !ids.includes(n.id))
+  contextMenu.value = null
+  save()
+}
+
+function pasteNodes() {
+  if (!copiedNodes.value?.length) return
+  const center = screenToFlowCoordinate({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+  const pasted = copiedNodes.value.map((src, i) => {
+    const offset = (i + 1) * 30
+    return {
+      ...JSON.parse(JSON.stringify(src)),
+      id: nextId(),
+      position: {
+        x: (contextMenu.value?.x != null ? screenToFlowCoordinate({ x: contextMenu.value.x, y: contextMenu.value.y }).x : center.x) + offset - 80,
+        y: (contextMenu.value?.y != null ? screenToFlowCoordinate({ x: contextMenu.value.x, y: contextMenu.value.y }).y : center.y) + offset - 40,
+      },
+      selected: true,
+    }
+  })
+  nodes.value.push(...pasted)
+  addSelectedNodes(pasted)
+  contextMenu.value = null
+  save()
+}
+
+function editNodeFromMenu() {
+  if (!contextMenu.value?.node) return
+  openModal(contextMenu.value.node)
+  contextMenu.value = null
 }
 </script>
 
@@ -909,5 +1032,43 @@ function loadFile(event) {
   border: 1px solid #333;
   pointer-events: none;
   user-select: none;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 100;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  overflow: hidden;
+  min-width: 140px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+  padding: 4px;
+}
+.context-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 14px;
+  background: none;
+  border: none;
+  color: #ccc;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.12s;
+}
+.context-item:hover:not(:disabled) {
+  background: #2a2a2a;
+  color: #fff;
+}
+.context-item:disabled {
+  color: #555;
+  cursor: default;
+  pointer-events: none;
+}
+.context-item.danger:hover {
+  background: #3a1a1a;
+  color: #f66;
 }
 </style>
