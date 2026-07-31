@@ -2,6 +2,7 @@
   <div class="relative w-full h-screen bg-black">
     <div class="absolute top-4 left-4 z-20 toolbar">
       <button @click="showAddClassModal = true" class="btn-primary">+ Class</button>
+      <button @click="openCreateGroupModal" class="btn-secondary" :disabled="selectedNodeCount < 2">Group</button>
       <button @click="startNew" class="btn-secondary">New</button>
       <button @click="saveFile" class="btn-secondary" :disabled="!nodes.length && !edges.length">Save</button>
       <button @click="openFileInput" class="btn-secondary">Open</button>
@@ -22,6 +23,8 @@
       @connect="onConnect"
       @node-double-click="onNodeDoubleClick($event)"
       @edge-double-click="onEdgeDoubleClick($event)"
+      @node-drag-start="onNodeDragStart"
+      @node-drag="onNodeDrag"
       @node-drag-stop="onNodeDragStop"
       :min-zoom="0.1"
       :max-zoom="4"
@@ -35,6 +38,9 @@
     >
       <template #node-uml-class="nodeProps">
         <UMLClassNode v-bind="nodeProps" @delete="deleteNode(nodeProps.id)" />
+      </template>
+      <template #node-group="nodeProps">
+        <UMLGroupNode v-bind="nodeProps" />
       </template>
       <template #edge-uml-edge="edgeProps">
         <UMLClassEdge v-bind="edgeProps" />
@@ -151,6 +157,27 @@
       </div>
     </div>
     <div
+      v-if="showGroupModal"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+    >
+      <div class="bg-neutral-900 rounded-lg shadow-2xl w-96 max-w-full mx-4 border border-gray-700 p-6">
+        <h2 class="text-lg font-bold text-white mb-4">{{ groupModalMode === 'create' ? 'New Group' : 'Group Name' }}</h2>
+        <input
+          ref="groupNameInputRef"
+          v-model="groupLabelDraft"
+          type="text"
+          placeholder="e.g. Services"
+          class="w-full px-3 py-2 bg-black text-white border border-gray-600 rounded focus:ring-2 focus:ring-white focus:border-white placeholder-gray-500"
+          @keydown.enter="submitGroupModal"
+          @keydown.esc="showGroupModal = false"
+        />
+        <div class="flex justify-end gap-3 mt-4">
+          <button @click="showGroupModal = false" class="btn-secondary">Cancel</button>
+          <button @click="submitGroupModal" class="btn-primary">{{ groupModalMode === 'create' ? 'Create Group' : 'Save' }}</button>
+        </div>
+      </div>
+    </div>
+    <div
       v-if="contextMenu"
       class="context-menu"
       :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
@@ -168,7 +195,22 @@
         <button @click="editEdgeLabel()" class="context-item">Edit Label</button>
         <button @click="deleteEdge(contextMenu.edge.id)" class="context-item danger">Delete</button>
       </template>
+      <template v-else-if="contextMenu.node?.type === 'group'">
+        <button
+          @click="renameGroup()"
+          class="context-item"
+        >Rename Group</button>
+        <button
+          @click="ungroup()"
+          class="context-item danger"
+        >Ungroup</button>
+      </template>
       <template v-else>
+        <button
+          @click="openCreateGroupModal()"
+          class="context-item"
+          :disabled="selectedNodeCount < 2"
+        >Group Selection</button>
         <button
           @click="copySelected()"
           class="context-item"
@@ -189,18 +231,25 @@
           class="context-item danger"
           :disabled="!contextMenu.node"
         >Delete</button>
+        <div v-if="contextMenu.node?.groupId" class="context-divider"></div>
+        <button
+          v-if="contextMenu.node?.groupId"
+          @click="removeFromGroup()"
+          class="context-item"
+        >Remove from Group</button>
       </template>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, provide } from 'vue'
+import { ref, reactive, onMounted, nextTick, provide, watch, computed } from 'vue'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import UMLClassNode from './UMLClassNode.vue'
 import UMLClassEdge from './UMLClassEdge.vue'
+import UMLGroupNode from './UMLGroupNode.vue'
 
 const NODE_W = 200
 const ROW = 22
@@ -361,13 +410,42 @@ function getBounds(nodes) {
   if (!nodes.length) return { x: 0, y: 0, w: 400, h: 300 }
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
   for (const n of nodes) {
-    const h = nodeH(n.data)
+    const w = n.type === 'group' ? n.data.w : NODE_W
+    const h = n.type === 'group' ? n.data.h : nodeH(n.data)
     minX = Math.min(minX, n.position.x)
     minY = Math.min(minY, n.position.y)
-    maxX = Math.max(maxX, n.position.x + NODE_W)
+    maxX = Math.max(maxX, n.position.x + w)
     maxY = Math.max(maxY, n.position.y + h)
   }
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+}
+
+function drawGroup(ctx, g) {
+  const { x, y } = g.position
+  const w = g.data.w, h = g.data.h
+  ctx.fillStyle = 'rgba(255,255,255,0.02)'
+  ctx.strokeStyle = '#444'
+  ctx.lineWidth = 1.5
+  ctx.setLineDash([6, 4])
+  ctx.beginPath()
+  ctx.roundRect(x, y, w, h, 10)
+  ctx.fill()
+  ctx.stroke()
+  ctx.setLineDash([])
+
+  const label = g.data.label || 'Group'
+  ctx.font = 'bold 12px sans-serif'
+  const tw = ctx.measureText(label).width
+  ctx.fillStyle = '#1a1a1a'
+  ctx.beginPath()
+  ctx.roundRect(x + 8, y - 14, tw + 20, 22, 6)
+  ctx.fill()
+  ctx.strokeStyle = '#444'
+  ctx.stroke()
+  ctx.fillStyle = '#ccc'
+  ctx.textBaseline = 'middle'
+  ctx.textAlign = 'left'
+  ctx.fillText(label, x + 18, y + 1)
 }
 
 function renderToCanvas(nodes, edges, bg) {
@@ -392,8 +470,9 @@ function renderToCanvas(nodes, edges, bg) {
 
   const nodesMap = Object.fromEntries(nodes.map(n => [n.id, n]))
 
+  for (const node of nodes) if (node.type === 'group') drawGroup(ctx, node)
   for (const edge of edges) drawEdge(ctx, edge, nodesMap)
-  for (const node of nodes) drawNode(ctx, node)
+  for (const node of nodes) if (node.type !== 'group') drawNode(ctx, node)
 
   return canvas
 }
@@ -434,8 +513,63 @@ const fileInputRef = ref(null)
 const contextMenu = ref(null)
 const copiedNodes = ref(null)
 const showArrowheads = ref(true)
+const showGroupModal = ref(false)
+const groupModalMode = ref('create')
+const groupLabelDraft = ref('')
+const editingGroupId = ref(null)
+const groupNameInputRef = ref(null)
+let dragStartPositions = null
 provide('showArrowheads', showArrowheads)
 provide('edges', edges)
+
+const snapState = reactive({})
+let snapKey = 0
+function triggerSnap(nodeId, dir) {
+  snapState[nodeId] = { dir, key: ++snapKey }
+}
+provide('snapState', snapState)
+
+const groupAnims = new Map()
+function animateGroupResize(g) {
+  const PAD = 40
+  const members = nodes.value.filter(n => n.groupId === g.id)
+  const b = members.length ? getBounds(members) : null
+  const target = b
+    ? {
+        x: b.x - PAD,
+        y: b.y - PAD,
+        w: Math.max(b.w + PAD * 2, 220),
+        h: Math.max(b.h + PAD * 2, 120),
+      }
+    : { x: g.position.x, y: g.position.y, w: 220, h: 120 }
+  const from = { x: g.position.x, y: g.position.y, w: g.data.w, h: g.data.h }
+  const gid = g.id
+  const prev = groupAnims.get(gid)
+  if (prev) {
+    cancelAnimationFrame(prev.raf)
+    clearTimeout(prev.timer)
+  }
+  const dur = 200
+  const t0 = performance.now()
+  const ease = t => 1 - Math.pow(1 - t, 3)
+  const step = (now) => {
+    const t = Math.min((now - t0) / dur, 1)
+    const e = ease(t)
+    g.position = { x: from.x + (target.x - from.x) * e, y: from.y + (target.y - from.y) * e }
+    g.data = { ...g.data, w: from.w + (target.w - from.w) * e, h: from.h + (target.h - from.h) * e }
+    updateNode(gid, { position: g.position, data: g.data })
+    if (t < 1) schedule()
+    else groupAnims.delete(gid)
+  }
+  const schedule = () => {
+    const entry = {
+      raf: requestAnimationFrame(step),
+      timer: setTimeout(() => step(performance.now()), 40),
+    }
+    groupAnims.set(gid, entry)
+  }
+  schedule()
+}
 
 const defaultEdgeOptions = { type: 'uml-edge' }
 
@@ -472,7 +606,9 @@ function save() {
       id: n.id,
       type: n.type,
       position: { x: n.position.x, y: n.position.y },
-      data: { ...n.data }
+      data: { ...n.data },
+      groupId: n.groupId,
+      zIndex: n.zIndex
     })),
     edges: edges.value.map(e => ({
       id: e.id, source: e.source, target: e.target,
@@ -485,6 +621,10 @@ function save() {
 
 
 
+function loadIdCounter(nodes) {
+  return Math.max(...nodes.map(n => parseInt(n.id.replace('node_', '')) || parseInt(n.id.replace('group_', '')) || 0))
+}
+
 function load() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
@@ -496,14 +636,20 @@ function load() {
       const typeEntry = relationTypes.find(r => r.label === e.label)
       return { ...e, ...edgeStyleForType(typeEntry ? typeEntry.value : 'association') }
     })
-    idCounter = Math.max(...data.nodes.map(n => parseInt(n.id.replace('node_', '')) || 0))
+    idCounter = loadIdCounter(data.nodes)
     savedViewport = data.viewport || null
   } catch {}
 }
 
 load()
 
-const { screenToFlowCoordinate, viewport, setViewport, addSelectedNodes, getSelectedNodes } = useVueFlow()
+const { screenToFlowCoordinate, viewport, setViewport, addSelectedNodes, getSelectedNodes, updateNodePositions, updateNode, findNode } = useVueFlow()
+
+const selectedNodeCount = computed(() => getSelectedNodes.value.filter(n => n.type !== 'group').length)
+
+watch(showGroupModal, (v) => {
+  if (v) nextTick(() => groupNameInputRef.value?.focus())
+})
 
 
 
@@ -531,7 +677,7 @@ onMounted(async () => {
         e.preventDefault()
         const ids = selected.map(n => n.id)
         edges.value = edges.value.filter(ed => !ids.includes(ed.source) && !ids.includes(ed.target))
-        nodes.value = nodes.value.filter(n => !ids.includes(n.id))
+        removeNodes(ids)
         contextMenu.value = null
         save()
       }
@@ -561,16 +707,220 @@ function closeModal() {
 }
 
 function deleteNode(id) {
+  const gids = new Set(nodes.value.filter(n => n.id === id && n.groupId).map(n => n.groupId))
   edges.value = edges.value.filter(e => e.source !== id && e.target !== id)
-  nodes.value = nodes.value.filter(n => n.id !== id)
+  removeNodes([id])
+  for (const gid of gids) {
+    const g = nodes.value.find(x => x.id === gid)
+    if (g) animateGroupResize(g)
+  }
   save()
+}
+
+function removeNodes(ids) {
+  const idSet = new Set(ids)
+  for (const n of nodes.value) {
+    if (n.type === 'group' && idSet.has(n.id)) {
+      nodes.value.forEach(m => { if (m.groupId === n.id) m.groupId = null })
+    }
+  }
+  nodes.value = nodes.value.filter(n => !idSet.has(n.id))
+}
+
+function openCreateGroupModal() {
+  groupLabelDraft.value = ''
+  editingGroupId.value = null
+  groupModalMode.value = 'create'
+  showGroupModal.value = true
+  contextMenu.value = null
+}
+
+function submitGroupModal() {
+  if (groupModalMode.value === 'create') {
+    createGroup(groupLabelDraft.value.trim())
+  } else {
+    saveGroupLabel()
+  }
+  showGroupModal.value = false
+  editingGroupId.value = null
+}
+
+function createGroup(label) {
+  const selected = getSelectedNodes.value.filter(n => n.type !== 'group')
+  if (selected.length < 2) return
+  const bounds = getBounds(selected)
+  const PAD = 40
+  const w = Math.max(bounds.w + PAD * 2, 220)
+  const h = Math.max(bounds.h + PAD * 2, 120)
+  const id = `group_${++idCounter}`
+  nodes.value.push({
+    id,
+    type: 'group',
+    position: { x: bounds.x - PAD, y: bounds.y - PAD },
+    data: { label: label || `Group ${idCounter}`, w, h },
+    zIndex: -1,
+  })
+  selected.forEach(n => {
+    const src = nodes.value.find(x => x.id === n.id)
+    if (src) src.groupId = id
+  })
+  contextMenu.value = null
+  save()
+}
+
+function fitGroupToMembers(g) {
+  const members = nodes.value.filter(n => n.groupId === g.id)
+  if (!members.length) return
+  const PAD = 40
+  const b = getBounds(members.map(m => findNode(m.id) || m))
+  g.position = { x: b.x - PAD, y: b.y - PAD }
+  g.data = { ...g.data, w: Math.max(b.w + PAD * 2, 220), h: Math.max(b.h + PAD * 2, 120) }
+}
+
+function renameGroup() {
+  if (!contextMenu.value?.node) return
+  editingGroupId.value = contextMenu.value.node.id
+  groupLabelDraft.value = contextMenu.value.node.data.label
+  groupModalMode.value = 'rename'
+  showGroupModal.value = true
+  contextMenu.value = null
+}
+
+function saveGroupLabel() {
+  const label = groupLabelDraft.value.trim()
+  if (label && editingGroupId.value) {
+    const node = nodes.value.find(n => n.id === editingGroupId.value)
+    if (node) node.data = { ...node.data, label }
+    save()
+  }
+}
+
+function ungroup() {
+  const id = contextMenu.value?.node?.id
+  if (!id) return
+  nodes.value.forEach(n => { if (n.groupId === id) n.groupId = null })
+  nodes.value = nodes.value.filter(n => n.id !== id)
+  contextMenu.value = null
+  save()
+}
+
+function removeFromGroup() {
+  const nodeId = contextMenu.value?.node?.id
+  if (!nodeId) return
+  const node = nodes.value.find(n => n.id === nodeId)
+  if (node) {
+    const g = nodes.value.find(x => x.id === node.groupId)
+    node.groupId = null
+    if (g) animateGroupResize(g)
+  }
+  contextMenu.value = null
+  save()
+}
+
+function groupAtPoint(x, y, excludeId) {
+  return nodes.value.find(g =>
+    g.type === 'group' && g.id !== excludeId &&
+    x >= g.position.x && x <= g.position.x + g.data.w &&
+    y >= g.position.y && y <= g.position.y + g.data.h
+  )
+}
+
+function snapClassNode(n) {
+  const cx = n.position.x + NODE_W / 2
+  const cy = n.position.y + nodeH(n.data) / 2
+  const target = groupAtPoint(cx, cy)
+  if (target) {
+    if (n.groupId !== target.id) {
+      n.groupId = target.id
+      triggerSnap(n.id, 'in')
+      animateGroupResize(target)
+    }
+  } else if (n.groupId) {
+    const old = nodes.value.find(g => g.id === n.groupId)
+    n.groupId = null
+    triggerSnap(n.id, 'out')
+    if (old) animateGroupResize(old)
+  }
+}
+
+function onNodeDragStart(dragEvent) {
+  dragStartPositions = dragEvent.nodes.map(n => ({ id: n.id, x: n.position.x, y: n.position.y }))
+}
+
+function onNodeDrag(dragEvent) {
+  const dragged = dragEvent.node
+  if (dragged.type === 'group') {
+    const start = dragStartPositions?.find(p => p.id === dragged.id)
+    if (!start) return
+    const dx = dragged.position.x - start.x
+    const dy = dragged.position.y - start.y
+    const draggedIds = new Set(dragEvent.nodes.map(n => n.id))
+    const moves = []
+    nodes.value.forEach(n => {
+      if (n.groupId === dragged.id && !draggedIds.has(n.id)) {
+        moves.push({ id: n.id, position: { x: n.position.x + dx, y: n.position.y + dy }, from: n.position })
+      }
+    })
+    if (moves.length) updateNodePositions(moves, true, false)
+  } else if (dragged.type === 'uml-class') {
+    const n = nodes.value.find(x => x.id === dragged.id)
+    if (n) {
+      n.position = { x: dragged.position.x, y: dragged.position.y }
+      snapClassNode(n)
+    }
+  }
 }
 
 function onNodeDragStop(dragEvent) {
   const dragged = dragEvent.node
+  const start = dragStartPositions?.find(p => p.id === dragged.id)
+  dragStartPositions = null
   const node = nodes.value.find(n => n.id === dragged.id)
-  if (node) {
-    node.position = { x: dragged.position.x, y: dragged.position.y }
+  if (!node) return
+
+  for (const dn of dragEvent.nodes) {
+    const src = nodes.value.find(x => x.id === dn.id)
+    if (src) src.position = { x: dn.position.x, y: dn.position.y }
+  }
+
+  if (node.type === 'group') {
+    const gcx = node.position.x + node.data.w / 2
+    const gcy = node.position.y + node.data.h / 2
+    const target = nodes.value.find(g =>
+      g.type === 'group' && g.id !== node.id &&
+      gcx >= g.position.x && gcx <= g.position.x + g.data.w &&
+      gcy >= g.position.y && gcy <= g.position.y + g.data.h
+    )
+    if (target) {
+      const dx = dragged.position.x - (start?.x ?? dragged.position.x)
+      const dy = dragged.position.y - (start?.y ?? dragged.position.y)
+      const draggedIds = new Set(dragEvent.nodes.map(n => n.id))
+      nodes.value.forEach(m => {
+        if (m.groupId === node.id) {
+          if (!draggedIds.has(m.id)) {
+            m.position = { x: m.position.x + dx, y: m.position.y + dy }
+          }
+          m.groupId = target.id
+        }
+      })
+      nodes.value = nodes.value.filter(n => n.id !== node.id)
+      fitGroupToMembers(target)
+      updateNode(target.id, { position: target.position, data: target.data })
+    } else {
+      const dx = dragged.position.x - (start?.x ?? dragged.position.x)
+      const dy = dragged.position.y - (start?.y ?? dragged.position.y)
+      const draggedIds = new Set(dragEvent.nodes.map(n => n.id))
+      const moves = []
+      nodes.value.forEach(n => {
+        if (n.groupId === node.id && !draggedIds.has(n.id)) {
+          n.position = { x: n.position.x + dx, y: n.position.y + dy }
+          moves.push({ id: n.id, position: n.position, from: n.position })
+        }
+      })
+      if (moves.length) updateNodePositions(moves, true, false)
+    }
+  } else if (node.type === 'uml-class') {
+    snapClassNode(node)
   }
   save()
 }
@@ -684,6 +1034,13 @@ function cancelRelation() {
 }
 
 function onNodeDoubleClick(payload) {
+  if (payload.node.type === 'group') {
+    editingGroupId.value = payload.node.id
+    groupLabelDraft.value = payload.node.data.label
+    groupModalMode.value = 'rename'
+    showGroupModal.value = true
+    return
+  }
   openModal(payload.node)
 }
 
@@ -710,7 +1067,9 @@ function getDiagramData() {
       id: n.id,
       type: n.type,
       position: { x: n.position.x, y: n.position.y },
-      data: { ...n.data }
+      data: { ...n.data },
+      groupId: n.groupId,
+      zIndex: n.zIndex
     })),
     edges: edges.value.map(e => ({
       id: e.id,
@@ -754,7 +1113,7 @@ function loadFile(event) {
         return { ...e, ...edgeStyleForType(typeEntry ? typeEntry.value : 'association') }
       })
       if (data.nodes.length > 0) {
-        idCounter = Math.max(...data.nodes.map(n => parseInt(n.id.replace('node_', '')) || 0))
+        idCounter = loadIdCounter(data.nodes)
       }
       save()
     } catch (err) {
@@ -804,11 +1163,12 @@ function deleteEdge(id) {
 }
 
 function copySelected() {
+  const clean = (n) => n.type !== 'group' ? { ...JSON.parse(JSON.stringify(n)), groupId: null } : null
   const selected = getSelectedNodes.value
   if (selected.length === 0 && contextMenu.value?.node) {
-    copiedNodes.value = [JSON.parse(JSON.stringify(contextMenu.value.node))]
+    copiedNodes.value = [clean(contextMenu.value.node)].filter(Boolean)
   } else if (selected.length > 0) {
-    copiedNodes.value = selected.map(n => JSON.parse(JSON.stringify(n)))
+    copiedNodes.value = selected.map(clean).filter(Boolean)
   }
   contextMenu.value = null
 }
@@ -825,7 +1185,7 @@ function deleteSelected() {
     ids = [contextMenu.value.node.id]
   }
   edges.value = edges.value.filter(e => !ids.includes(e.source) && !ids.includes(e.target))
-  nodes.value = nodes.value.filter(n => !ids.includes(n.id))
+  removeNodes(ids)
   contextMenu.value = null
   save()
 }
@@ -1012,6 +1372,15 @@ function editNodeFromMenu() {
 .vue-flow__node.selected .uml-node {
   border-color: #666 !important;
   box-shadow: 0 0 0 1px #444;
+}
+
+.vue-flow__node.selected .uml-group {
+  border-color: #888;
+  background: rgba(255, 255, 255, 0.04);
+}
+.vue-flow__node.selected .uml-group-label {
+  border-color: #888;
+  color: #fff;
 }
 
 .vue-flow__edge-path,

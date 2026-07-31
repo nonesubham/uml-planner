@@ -1,5 +1,5 @@
 <template>
-  <div class="uml-node" :style="{ background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', minWidth: '160px' }">
+  <div class="uml-node" :class="animClass" @animationend="animClass = ''" :style="{ background: '#1a1a1a', border: '1px solid #333', borderRadius: '8px', minWidth: '160px' }">
     <div :style="{ borderRadius: '8px', overflow: 'hidden' }">
       <div class="node-header px-3 py-2 flex items-center" :style="{ background: '#262626', borderBottom: '1px solid #333' }">
         <span class="font-bold text-white text-sm">{{ data.name }}</span>
@@ -28,6 +28,7 @@
 </template>
 
 <script setup>
+import { ref, inject, watch } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
 
 const props = defineProps({
@@ -35,6 +36,13 @@ const props = defineProps({
   id: { type: [String, Number], default: '' }
 })
 const emit = defineEmits(['delete'])
+
+const snapState = inject('snapState', null)
+const animClass = ref('')
+
+watch(() => snapState?.[props.id], (v) => {
+  if (v) animClass.value = v.dir === 'in' ? 'snap-in' : 'snap-out'
+})
 
 const accessSymbol = (access) => {
   switch (access) {
@@ -45,3 +53,21 @@ const accessSymbol = (access) => {
   }
 }
 </script>
+
+<style scoped>
+.snap-in {
+  animation: uml-snap-in 260ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.snap-out {
+  animation: uml-snap-out 240ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+@keyframes uml-snap-in {
+  0% { transform: scale(0.82); filter: brightness(1.8); }
+  60% { transform: scale(1.07); filter: brightness(1.2); }
+  100% { transform: scale(1); filter: none; }
+}
+@keyframes uml-snap-out {
+  0% { transform: scale(1.08); filter: brightness(1.8); }
+  100% { transform: scale(1); filter: none; }
+}
+</style>
