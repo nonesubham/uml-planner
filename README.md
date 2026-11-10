@@ -8,7 +8,7 @@ A minimalist UML class diagram editor built with Vue 3 and Vue Flow. Create clas
 - **Smart placement** — New nodes appear at canvas center; overlapping nodes are offset automatically
 - **Drag & drop** — Freely reposition nodes on an infinite canvas
 - **Relationship edges** — Drag from any handle to connect classes; choose from 5 relationship types (association, inheritance, composition, aggregation, dependency)
-- **Edit nodes** — Double-click any node to modify its name, attributes, or methods
+- **Edit nodes** — Double-click any node to modify its name, attributes, or methods; drag hamburger handles to reorder attributes and methods
 - **Edit edges** — Double-click any edge to change its relationship type
 - **Delete nodes** — Remove unwanted classes with the × button on the node header
 - **Session persistence** — Diagram is auto-saved to localStorage and restored on revisit
