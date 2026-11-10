@@ -1,7 +1,7 @@
 <template>
   <div class="relative w-full h-screen bg-black">
     <div class="absolute top-4 left-4 z-20 toolbar">
-      <button @click="showAddClassModal = true" class="btn-primary">+ Class</button>
+      <button @click="openAddClassModal" class="btn-primary">+ Class</button>
       <button @click="openCreateGroupModal" class="btn-secondary" :disabled="selectedNodeCount < 2">Group</button>
       <button @click="startNew" class="btn-secondary">New</button>
       <button @click="saveFile" class="btn-secondary" :disabled="!nodes.length && !edges.length">Save</button>
@@ -244,7 +244,7 @@
 
 <script setup>
 import { ref, reactive, onMounted, nextTick, provide, watch, computed } from 'vue'
-import { VueFlow, useVueFlow } from '@vue-flow/core'
+import { VueFlow, useVueFlow, getBezierPath } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import UMLClassNode from './UMLClassNode.vue'
@@ -255,6 +255,14 @@ const NODE_W = 200
 const ROW = 22
 const HEADER = 36
 
+const relationTypes = [
+  { value: 'association', symbol: '───', label: 'has a', desc: 'Association' },
+  { value: 'inheritance', symbol: '──▷', label: 'is a', desc: 'Inheritance / Generalization' },
+  { value: 'composition', symbol: '◆──', label: 'contains', desc: 'Composition' },
+  { value: 'aggregation', symbol: '◇──', label: 'has a (aggregate)', desc: 'Aggregation' },
+  { value: 'dependency', symbol: '- - >', label: 'uses', desc: 'Dependency' },
+]
+
 function accessSym(a) {
   if (a === 'public') return '+'
   if (a === 'private') return '-'
@@ -264,13 +272,15 @@ function accessSym(a) {
 
 function nodeH(data) {
   let h = HEADER
-  if (data.attributes?.length) { h += 2; h += data.attributes.length * ROW }
-  if (data.methods?.length) { h += 2; h += data.methods.length * ROW }
+  if (data?.attributes?.length) { h += 2; h += data.attributes.length * ROW }
+  if (data?.methods?.length) { h += 2; h += data.methods.length * ROW }
   return h
 }
 
 function handlePt(node, handleId) {
-  const x = node.position.x, y = node.position.y, w = NODE_W, h = nodeH(node.data)
+  const x = node.position.x, y = node.position.y
+  const w = node.type === 'group' ? (node.data?.w || 220) : NODE_W
+  const h = node.type === 'group' ? (node.data?.h || 120) : nodeH(node.data)
   if (handleId === 'left') return { x, y: y + h / 2 }
   if (handleId === 'right') return { x: x + w, y: y + h / 2 }
   if (handleId === 'top') return { x: x + w / 2, y }
@@ -288,6 +298,7 @@ function drawArrow(ctx, x, y, ang, size) {
   ctx.lineTo(x - size * Math.cos(ang - 0.4), y - size * Math.sin(ang - 0.4))
   ctx.lineTo(x - size * Math.cos(ang + 0.4), y - size * Math.sin(ang + 0.4))
   ctx.closePath()
+  ctx.fillStyle = '#555'
   ctx.fill()
 }
 
@@ -295,20 +306,26 @@ function drawHollowTriangle(ctx, x, y, ang, size) {
   ctx.beginPath()
   ctx.moveTo(x, y)
   ctx.lineTo(x - size * Math.cos(ang - 0.5), y - size * Math.sin(ang - 0.5))
-  ctx.lineTo(x - size * Math.cos(ang), y - size * Math.sin(ang) - size * 0.5)
   ctx.lineTo(x - size * Math.cos(ang + 0.5), y - size * Math.sin(ang + 0.5))
   ctx.closePath()
+  ctx.fillStyle = '#1a1a1a'
+  ctx.fill()
+  ctx.strokeStyle = '#555'
+  ctx.lineWidth = 2
   ctx.stroke()
 }
 
 function drawDiamond(ctx, x, y, ang, size, fill) {
   ctx.beginPath()
   ctx.moveTo(x, y)
-  ctx.lineTo(x - size * Math.cos(ang - 0.6), y - size * Math.sin(ang - 0.6))
-  ctx.lineTo(x - 2 * size * Math.cos(ang), y - 2 * size * Math.sin(ang))
-  ctx.lineTo(x - size * Math.cos(ang + 0.6), y - size * Math.sin(ang + 0.6))
+  ctx.lineTo(x + size * Math.cos(ang - 0.5), y + size * Math.sin(ang - 0.5))
+  ctx.lineTo(x + 2 * size * Math.cos(ang), y + 2 * size * Math.sin(ang))
+  ctx.lineTo(x + size * Math.cos(ang + 0.5), y + size * Math.sin(ang + 0.5))
   ctx.closePath()
-  if (fill) ctx.fill()
+  ctx.fillStyle = fill ? '#555' : '#1a1a1a'
+  ctx.fill()
+  ctx.strokeStyle = '#555'
+  ctx.lineWidth = 2
   ctx.stroke()
 }
 
@@ -317,18 +334,55 @@ function edgeTypeVal(label) {
   return entry ? entry.value : 'association'
 }
 
+function parseBezierPath(pathStr, from, to) {
+  const m = pathStr.match(/M\s*([\d.-]+)[,\s]+([\d.-]+)\s*C\s*([\d.-]+)[,\s]+([\d.-]+)\s+([\d.-]+)[,\s]+([\d.-]+)\s+([\d.-]+)[,\s]+([\d.-]+)/)
+  if (m) {
+    return {
+      sx: parseFloat(m[1]),
+      sy: parseFloat(m[2]),
+      c1x: parseFloat(m[3]),
+      c1y: parseFloat(m[4]),
+      c2x: parseFloat(m[5]),
+      c2y: parseFloat(m[6]),
+      tx: parseFloat(m[7]),
+      ty: parseFloat(m[8]),
+    }
+  }
+  return {
+    sx: from.x,
+    sy: from.y,
+    c1x: (from.x + to.x) / 2,
+    c1y: from.y,
+    c2x: (from.x + to.x) / 2,
+    c2y: to.y,
+    tx: to.x,
+    ty: to.y,
+  }
+}
+
 function drawEdge(ctx, edge, nodesMap) {
   const src = nodesMap[edge.source]
   const dst = nodesMap[edge.target]
   if (!src || !dst) return
 
-  const from = handlePt(src, edge.sourceHandle || 'right')
-  const to = handlePt(dst, edge.targetHandle || 'left')
+  const srcHandle = edge.sourceHandle || 'right'
+  const dstHandle = edge.targetHandle || 'left'
+  const from = handlePt(src, srcHandle)
+  const to = handlePt(dst, dstHandle)
   const label = edge.label || 'has a'
   const typeVal = edgeTypeVal(label)
 
-  const mx = (from.x + to.x) / 2, my = (from.y + to.y) / 2
-  const ang = angle(from, to)
+  const [pathStr, labelX, labelY] = getBezierPath({
+    sourceX: from.x,
+    sourceY: from.y,
+    sourcePosition: srcHandle,
+    targetX: to.x,
+    targetY: to.y,
+    targetPosition: dstHandle,
+    curvature: 0.25,
+  })
+
+  const { sx, sy, c1x, c1y, c2x, c2y, tx, ty } = parseBezierPath(pathStr, from, to)
   const isDashed = typeVal === 'dependency'
 
   ctx.strokeStyle = '#555'
@@ -336,23 +390,43 @@ function drawEdge(ctx, edge, nodesMap) {
   ctx.lineWidth = 2
   ctx.setLineDash(isDashed ? [8, 5] : [])
   ctx.beginPath()
-  ctx.moveTo(from.x, from.y)
-  ctx.lineTo(to.x, to.y)
+  ctx.moveTo(sx, sy)
+  ctx.bezierCurveTo(c1x, c1y, c2x, c2y, tx, ty)
   ctx.stroke()
   ctx.setLineDash([])
 
   if (showArrowheads.value) {
-    if (typeVal === 'inheritance') drawHollowTriangle(ctx, to.x, to.y, ang, 10)
-    else if (typeVal === 'composition') drawDiamond(ctx, from.x, from.y, ang, 5, true)
-    else if (typeVal === 'aggregation') drawDiamond(ctx, from.x, from.y, ang, 5, false)
-    else if (typeVal === 'dependency' || typeVal === 'association') drawArrow(ctx, to.x, to.y, ang, 8)
+    const endAng = Math.atan2(ty - c2y, tx - c2x)
+    const startAng = Math.atan2(c1y - sy, c1x - sx)
+
+    if (typeVal === 'inheritance') drawHollowTriangle(ctx, tx, ty, endAng, 10)
+    else if (typeVal === 'composition') drawDiamond(ctx, sx, sy, startAng, 5, true)
+    else if (typeVal === 'aggregation') drawDiamond(ctx, sx, sy, startAng, 5, false)
+    else if (typeVal === 'dependency' || typeVal === 'association') drawArrow(ctx, tx, ty, endAng, 8)
   }
 
-  ctx.fillStyle = '#fff'
-  ctx.font = '11px sans-serif'
-  ctx.textBaseline = 'bottom'
-  ctx.textAlign = 'center'
-  ctx.fillText(label, mx, my - 6)
+  if (label) {
+    ctx.font = '500 11px sans-serif'
+    const tw = ctx.measureText(label).width
+    const padX = 8, padY = 4
+    const bw = tw + padX * 2
+    const bh = 18
+    const bx = labelX - bw / 2
+    const by = labelY - bh / 2
+
+    ctx.fillStyle = '#1a1a1a'
+    ctx.strokeStyle = '#555'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.roundRect(bx, by, bw, bh, 4)
+    ctx.fill()
+    ctx.stroke()
+
+    ctx.fillStyle = '#fff'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(label, labelX, labelY)
+  }
 }
 
 function drawNode(ctx, node) {
@@ -493,12 +567,184 @@ async function exportJpg() {
   a.click()
 }
 
+function renderToSvg(nodes, edges, bg = '#000000') {
+  const PAD = 40
+  const bounds = getBounds(nodes)
+  const W = bounds.w + PAD * 2
+  const H = bounds.h + PAD * 2
+
+  const nodesMap = Object.fromEntries(nodes.map(n => [n.id, n]))
+
+  function escapeXml(str) {
+    if (str == null) return ''
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;')
+  }
+
+  let out = `<?xml version="1.0" encoding="UTF-8"?>\n`
+  out += `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">\n`
+  out += `  <style>\n`
+  out += `    .uml-class-title { font-family: sans-serif; font-weight: bold; font-size: 13px; fill: #ffffff; }\n`
+  out += `    .uml-class-access { font-family: sans-serif; font-size: 11px; fill: #9ca3af; }\n`
+  out += `    .uml-code-text { font-family: monospace, Courier, monospace; font-size: 11px; fill: #d1d5db; }\n`
+  out += `    .uml-edge-text { font-family: sans-serif; font-weight: 500; font-size: 11px; fill: #ffffff; text-anchor: middle; dominant-baseline: central; }\n`
+  out += `    .uml-group-text { font-family: sans-serif; font-weight: 600; font-size: 12px; fill: #cccccc; dominant-baseline: central; }\n`
+  out += `  </style>\n`
+
+  if (bg) {
+    out += `  <rect width="100%" height="100%" fill="${bg}" />\n`
+  }
+
+  const tx = PAD - bounds.x
+  const ty = PAD - bounds.y
+  out += `  <g transform="translate(${tx}, ${ty})">\n`
+
+  // 1. Groups
+  for (const node of nodes) {
+    if (node.type === 'group') {
+      const gx = node.position.x, gy = node.position.y
+      const gw = node.data?.w || 220, gh = node.data?.h || 120
+      const label = node.data?.label || 'Group'
+      const labelW = Math.max(label.length * 8 + 20, 60)
+      out += `    <g id="${escapeXml(node.id)}">\n`
+      out += `      <rect x="${gx}" y="${gy}" width="${gw}" height="${gh}" rx="10" fill="rgba(255,255,255,0.02)" stroke="#4a4a4a" stroke-width="1.5" stroke-dasharray="6,4" />\n`
+      out += `      <rect x="${gx + 8}" y="${gy - 11}" width="${labelW}" height="22" rx="6" fill="#1a1a1a" stroke="#4a4a4a" stroke-width="1" />\n`
+      out += `      <text x="${gx + 18}" y="${gy}" class="uml-group-text">${escapeXml(label)}</text>\n`
+      out += `    </g>\n`
+    }
+  }
+
+  // 2. Edges
+  for (const edge of edges) {
+    const src = nodesMap[edge.source]
+    const dst = nodesMap[edge.target]
+    if (!src || !dst) continue
+
+    const srcHandle = edge.sourceHandle || 'right'
+    const dstHandle = edge.targetHandle || 'left'
+    const from = handlePt(src, srcHandle)
+    const to = handlePt(dst, dstHandle)
+    const label = edge.label || 'has a'
+    const typeVal = edgeTypeVal(label)
+
+    const [pathStr, labelX, labelY] = getBezierPath({
+      sourceX: from.x,
+      sourceY: from.y,
+      sourcePosition: srcHandle,
+      targetX: to.x,
+      targetY: to.y,
+      targetPosition: dstHandle,
+      curvature: 0.25,
+    })
+
+    const { sx, sy, c1x, c1y, c2x, c2y, tx: ex, ty: ey } = parseBezierPath(pathStr, from, to)
+    const isDashed = typeVal === 'dependency'
+
+    out += `    <g id="${escapeXml(edge.id)}">\n`
+    out += `      <path d="${pathStr}" fill="none" stroke="#555555" stroke-width="2" ${isDashed ? 'stroke-dasharray="8,5"' : ''} />\n`
+
+    if (showArrowheads.value) {
+      const endAng = Math.atan2(ey - c2y, ex - c2x)
+      const startAng = Math.atan2(c1y - sy, c1x - sx)
+
+      if (typeVal === 'inheritance') {
+        const size = 10
+        const p1x = ex, p1y = ey
+        const p2x = ex - size * Math.cos(endAng - 0.5), p2y = ey - size * Math.sin(endAng - 0.5)
+        const p3x = ex - size * Math.cos(endAng + 0.5), p3y = ey - size * Math.sin(endAng + 0.5)
+        out += `      <polygon points="${p1x.toFixed(1)},${p1y.toFixed(1)} ${p2x.toFixed(1)},${p2y.toFixed(1)} ${p3x.toFixed(1)},${p3y.toFixed(1)}" fill="#1a1a1a" stroke="#555555" stroke-width="2" />\n`
+      } else if (typeVal === 'composition') {
+        const size = 5
+        const p1x = sx, p1y = sy
+        const p2x = sx + size * Math.cos(startAng - 0.5), p2y = sy + size * Math.sin(startAng - 0.5)
+        const p3x = sx + 2 * size * Math.cos(startAng), p3y = sy + 2 * size * Math.sin(startAng)
+        const p4x = sx + size * Math.cos(startAng + 0.5), p4y = sy + size * Math.sin(startAng + 0.5)
+        out += `      <polygon points="${p1x.toFixed(1)},${p1y.toFixed(1)} ${p2x.toFixed(1)},${p2y.toFixed(1)} ${p3x.toFixed(1)},${p3y.toFixed(1)} ${p4x.toFixed(1)},${p4y.toFixed(1)}" fill="#555555" stroke="#555555" stroke-width="2" />\n`
+      } else if (typeVal === 'aggregation') {
+        const size = 5
+        const p1x = sx, p1y = sy
+        const p2x = sx + size * Math.cos(startAng - 0.5), p2y = sy + size * Math.sin(startAng - 0.5)
+        const p3x = sx + 2 * size * Math.cos(startAng), p3y = sy + 2 * size * Math.sin(startAng)
+        const p4x = sx + size * Math.cos(startAng + 0.5), p4y = sy + size * Math.sin(startAng + 0.5)
+        out += `      <polygon points="${p1x.toFixed(1)},${p1y.toFixed(1)} ${p2x.toFixed(1)},${p2y.toFixed(1)} ${p3x.toFixed(1)},${p3y.toFixed(1)} ${p4x.toFixed(1)},${p4y.toFixed(1)}" fill="#1a1a1a" stroke="#555555" stroke-width="2" />\n`
+      } else if (typeVal === 'dependency' || typeVal === 'association') {
+        const size = 8
+        const p1x = ex, p1y = ey
+        const p2x = ex - size * Math.cos(endAng - 0.4), p2y = ey - size * Math.sin(endAng - 0.4)
+        const p3x = ex - size * Math.cos(endAng + 0.4), p3y = ey - size * Math.sin(endAng + 0.4)
+        out += `      <polygon points="${p1x.toFixed(1)},${p1y.toFixed(1)} ${p2x.toFixed(1)},${p2y.toFixed(1)} ${p3x.toFixed(1)},${p3y.toFixed(1)}" fill="#555555" stroke="#555555" stroke-width="1.5" />\n`
+      }
+    }
+
+    if (label) {
+      const labelW = label.length * 7 + 16
+      const labelH = 18
+      const lbx = labelX - labelW / 2
+      const lby = labelY - labelH / 2
+      out += `      <rect x="${lbx.toFixed(1)}" y="${lby.toFixed(1)}" width="${labelW}" height="${labelH}" rx="4" fill="#1a1a1a" stroke="#555555" stroke-width="1" />\n`
+      out += `      <text x="${labelX.toFixed(1)}" y="${labelY.toFixed(1)}" class="uml-edge-text">${escapeXml(label)}</text>\n`
+    }
+    out += `    </g>\n`
+  }
+
+  // 3. Class Nodes
+  for (const node of nodes) {
+    if (node.type === 'group') continue
+    const d = node.data || {}
+    const nx = node.position.x
+    const ny = node.position.y
+    const nw = NODE_W
+    const nh = nodeH(d)
+
+    out += `    <g id="${escapeXml(node.id)}">\n`
+    out += `      <rect x="${nx + 3}" y="${ny + 3}" width="${nw}" height="${nh}" rx="8" fill="rgba(0,0,0,0.4)" />\n`
+    out += `      <rect x="${nx}" y="${ny}" width="${nw}" height="${nh}" rx="8" fill="#1a1a1a" stroke="#333333" stroke-width="1" />\n`
+    out += `      <path d="M ${nx + 8} ${ny} L ${nx + nw - 8} ${ny} Q ${nx + nw} ${ny} ${nx + nw} ${ny + 8} L ${nx + nw} ${ny + HEADER} L ${nx} ${ny + HEADER} L ${nx} ${ny + 8} Q ${nx} ${ny} ${nx + 8} ${ny} Z" fill="#262626" />\n`
+    out += `      <line x1="${nx}" y1="${ny + HEADER}" x2="${nx + nw}" y2="${ny + HEADER}" stroke="#333333" stroke-width="1" />\n`
+    out += `      <text x="${nx + 12}" y="${ny + HEADER / 2}" dominant-baseline="central" class="uml-class-title">${escapeXml(d.name || '')}</text>\n`
+    const accSym = accessSym(d.access)
+    if (accSym && accSym.trim()) {
+      out += `      <text x="${nx + nw - 12}" y="${ny + HEADER / 2}" dominant-baseline="central" text-anchor="end" class="uml-class-access">${escapeXml(accSym)}</text>\n`
+    }
+
+    let cy = ny + HEADER
+    const writeRows = (items, prefixFn) => {
+      if (!items?.length) return
+      out += `      <line x1="${nx}" y1="${cy}" x2="${nx + nw}" y2="${cy}" stroke="#333333" stroke-width="1" />\n`
+      for (const item of items) {
+        const prefix = prefixFn ? prefixFn(item) : ''
+        let txt = `[${prefix}] ${item.name}`
+        if (item.type) txt += `: ${item.type}`
+        if (item.params !== undefined) txt += `(${item.params}): ${item.returnType}`
+        out += `      <text x="${nx + 12}" y="${cy + ROW / 2}" dominant-baseline="central" class="uml-code-text">${escapeXml(txt)}</text>\n`
+        cy += ROW
+      }
+    }
+
+    writeRows(d.attributes, (a) => accessSym(a.access))
+    writeRows(d.methods, (m) => accessSym(m.access))
+
+    out += `    </g>\n`
+  }
+
+  out += `  </g>\n`
+  out += `</svg>\n`
+  return out
+}
+
 async function exportSvg() {
-  const canvas = renderToCanvas(nodes.value, edges.value, null)
+  const svgContent = renderToSvg(nodes.value, edges.value, '#000000')
+  const blob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
-  a.href = canvas.toDataURL('image/png')
-  a.download = 'diagram.png'
+  a.href = url
+  a.download = 'diagram.svg'
   a.click()
+  URL.revokeObjectURL(url)
 }
 
 const nodes = ref([])
@@ -575,14 +821,6 @@ const defaultEdgeOptions = { type: 'uml-edge' }
 
 const customEdgeLabel = ref('')
 
-const relationTypes = [
-  { value: 'association', symbol: '───', label: 'has a', desc: 'Association' },
-  { value: 'inheritance', symbol: '──▷', label: 'is a', desc: 'Inheritance / Generalization' },
-  { value: 'composition', symbol: '◆──', label: 'contains', desc: 'Composition' },
-  { value: 'aggregation', symbol: '◇──', label: 'has a (aggregate)', desc: 'Aggregation' },
-  { value: 'dependency', symbol: '- - >', label: 'uses', desc: 'Dependency' },
-]
-
 const form = ref(createEmptyForm())
 
 function createEmptyForm() {
@@ -643,7 +881,7 @@ function load() {
 
 load()
 
-const { screenToFlowCoordinate, viewport, setViewport, addSelectedNodes, getSelectedNodes, updateNodePositions, updateNode, findNode } = useVueFlow()
+const { screenToFlowCoordinate, viewport, setViewport, addSelectedNodes, getSelectedNodes, updateNodePositions, updateNode, updateNodeData, updateNodeInternals, findNode } = useVueFlow()
 
 const selectedNodeCount = computed(() => getSelectedNodes.value.filter(n => n.type !== 'group').length)
 
@@ -685,14 +923,20 @@ onMounted(async () => {
   }, { capture: true })
 })
 
+function openAddClassModal() {
+  editingNodeId.value = null
+  form.value = createEmptyForm()
+  showAddClassModal.value = true
+}
+
 function openModal(nodeData) {
   if (nodeData) {
     editingNodeId.value = nodeData.id
     form.value = {
-      name: nodeData.data.name,
-      access: nodeData.data.access,
-      attributes: nodeData.data.attributes.map(a => ({ ...a })),
-      methods: nodeData.data.methods.map(m => ({ ...m }))
+      name: nodeData.data?.name || '',
+      access: nodeData.data?.access || 'public',
+      attributes: (nodeData.data?.attributes || []).map(a => ({ ...a })),
+      methods: (nodeData.data?.methods || []).map(m => ({ ...m }))
     }
   } else {
     editingNodeId.value = null
@@ -704,6 +948,7 @@ function openModal(nodeData) {
 function closeModal() {
   showAddClassModal.value = false
   editingNodeId.value = null
+  form.value = createEmptyForm()
 }
 
 function deleteNode(id) {
@@ -935,9 +1180,43 @@ function addClass() {
   const meths = form.value.methods.filter(m => m.name.trim())
 
   if (editingNodeId.value) {
-    const node = nodes.value.find(n => n.id === editingNodeId.value)
-    if (node) {
-      node.data = { ...node.data, name: form.value.name, access: form.value.access, attributes: attrs, methods: meths }
+    const targetId = editingNodeId.value
+    const newData = {
+      name: form.value.name,
+      access: form.value.access,
+      attributes: attrs,
+      methods: meths
+    }
+
+    const nodeIdx = nodes.value.findIndex(n => n.id === targetId)
+    if (nodeIdx !== -1) {
+      nodes.value[nodeIdx] = {
+        ...nodes.value[nodeIdx],
+        data: { ...nodes.value[nodeIdx].data, ...newData }
+      }
+      nodes.value = [...nodes.value]
+    }
+
+    const vfNode = findNode(targetId)
+    if (vfNode) {
+      vfNode.data = { ...vfNode.data, ...newData }
+    }
+    if (typeof updateNodeData === 'function') {
+      updateNodeData(targetId, newData)
+    }
+    if (typeof updateNode === 'function') {
+      updateNode(targetId, { data: newData })
+    }
+    if (typeof updateNodeInternals === 'function') {
+      updateNodeInternals([targetId])
+    }
+
+    const editedNode = nodes.value.find(n => n.id === targetId)
+    if (editedNode?.groupId) {
+      const g = nodes.value.find(x => x.id === editedNode.groupId)
+      if (g) {
+        animateGroupResize(g)
+      }
     }
   } else {
     const center = screenToFlowCoordinate({ x: window.innerWidth / 2, y: window.innerHeight / 2 })

@@ -13,7 +13,7 @@ A minimalist UML class diagram editor built with Vue 3 and Vue Flow. Create clas
 - **Delete nodes** — Remove unwanted classes with the × button on the node header
 - **Session persistence** — Diagram is auto-saved to localStorage and restored on revisit
 - **Save/Open** — Export diagrams as `.umld` files and re-import them later
-- **Export PNG/JPG** — Save your diagram as an image
+- **Export PNG/JPG/SVG** — Save your diagram as a raster image (PNG/JPG) or vector graphic (SVG) with authentic bezier curves and UML relationship markers
 - **Zoom & pan** — Controls panel for zoom in/out and fit-to-view
 - **Monochrome theme** — Pure black canvas with high-contrast white-on-dark styling
 
@@ -52,15 +52,17 @@ npm run preview
 7. **Double-click** a node to edit its fields
 8. **Save** — Download diagram as `.umld` file
 9. **Open** — Import a `.umld` file to restore a saved diagram
-10. **PNG / JPG** — Export your diagram as an image
+10. **PNG / JPG / SVG** — Export your diagram as a PNG, JPG, or SVG vector file
 
 ## Project Structure
 
 ```
 src/
 ├── components/
-│   ├── UMLDesigner.vue    # Main editor (canvas, toolbar, modals, graph logic)
-│   └── UMLClassNode.vue   # Custom node component with handles
+│   ├── UMLDesigner.vue    # Main editor (canvas, toolbar, modals, export, graph logic)
+│   ├── UMLClassNode.vue   # Custom class card node component with handles
+│   ├── UMLClassEdge.vue   # Custom relationship edge with direction-aware labels
+│   └── UMLGroupNode.vue   # Visual boundary container for grouped nodes
 ├── assets/                # Static assets
 ├── main.js                # Entry point
 ├── style.css              # Tailwind import
