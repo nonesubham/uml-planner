@@ -109,7 +109,31 @@
 
             <div class="mb-6">
               <label class="block text-sm font-medium text-gray-300 mb-2">Attributes (name: type):</label>
-              <div v-for="(attr, i) in form.attributes" :key="i" class="flex items-center gap-1 mb-1.5">
+              <div
+                v-for="(attr, i) in form.attributes"
+                :key="i"
+                class="drag-item-row flex items-center gap-1 mb-1.5 p-0.5 rounded transition-colors"
+                :class="{
+                  'opacity-40 bg-neutral-800': draggedAttrIndex === i,
+                  'border-t-2 border-white': dragOverAttrIndex === i && draggedAttrIndex !== i
+                }"
+                @dragover.prevent="onAttrDragOver(i, $event)"
+                @dragenter.prevent="dragOverAttrIndex = i"
+                @drop="onAttrDrop(i, $event)"
+              >
+                <span
+                  class="drag-handle cursor-grab active:cursor-grabbing text-gray-500 hover:text-white px-1 flex items-center justify-center shrink-0 select-none"
+                  draggable="true"
+                  title="Drag to reorder attribute"
+                  @dragstart="onAttrDragStart(i, $event)"
+                  @dragend="onAttrDragEnd"
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+                    <line x1="2.5" y1="4.5" x2="13.5" y2="4.5" />
+                    <line x1="2.5" y1="8" x2="13.5" y2="8" />
+                    <line x1="2.5" y1="11.5" x2="13.5" y2="11.5" />
+                  </svg>
+                </span>
                 <select v-model="attr.access"
                   class="w-14 shrink-0 px-1 py-1 bg-black text-white border border-gray-600 rounded text-xs focus:ring-2 focus:ring-white focus:border-white">
                   <option value="public">+</option><option value="private">-</option><option value="protected">#</option>
@@ -128,7 +152,31 @@
 
             <div class="mb-6">
               <label class="block text-sm font-medium text-gray-300 mb-2">Methods (name(params): returnType):</label>
-              <div v-for="(method, i) in form.methods" :key="i" class="flex items-center gap-1 mb-1.5">
+              <div
+                v-for="(method, i) in form.methods"
+                :key="i"
+                class="drag-item-row flex items-center gap-1 mb-1.5 p-0.5 rounded transition-colors"
+                :class="{
+                  'opacity-40 bg-neutral-800': draggedMethodIndex === i,
+                  'border-t-2 border-white': dragOverMethodIndex === i && draggedMethodIndex !== i
+                }"
+                @dragover.prevent="onMethodDragOver(i, $event)"
+                @dragenter.prevent="dragOverMethodIndex = i"
+                @drop="onMethodDrop(i, $event)"
+              >
+                <span
+                  class="drag-handle cursor-grab active:cursor-grabbing text-gray-500 hover:text-white px-1 flex items-center justify-center shrink-0 select-none"
+                  draggable="true"
+                  title="Drag to reorder method"
+                  @dragstart="onMethodDragStart(i, $event)"
+                  @dragend="onMethodDragEnd"
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+                    <line x1="2.5" y1="4.5" x2="13.5" y2="4.5" />
+                    <line x1="2.5" y1="8" x2="13.5" y2="8" />
+                    <line x1="2.5" y1="11.5" x2="13.5" y2="11.5" />
+                  </svg>
+                </span>
                 <select v-model="method.access"
                   class="w-14 shrink-0 px-1 py-1 bg-black text-white border border-gray-600 rounded text-xs focus:ring-2 focus:ring-white focus:border-white">
                   <option value="public">+</option><option value="private">-</option><option value="protected">#</option>
@@ -832,6 +880,78 @@ function createEmptyForm() {
   }
 }
 
+const draggedAttrIndex = ref(null)
+const dragOverAttrIndex = ref(null)
+
+function onAttrDragStart(index, event) {
+  draggedAttrIndex.value = index
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', String(index))
+  const rowEl = event.target.closest('.drag-item-row')
+  if (rowEl && event.dataTransfer.setDragImage) {
+    event.dataTransfer.setDragImage(rowEl, 15, 15)
+  }
+}
+
+function onAttrDragOver(index, event) {
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'move'
+  dragOverAttrIndex.value = index
+}
+
+function onAttrDrop(index, event) {
+  event.preventDefault()
+  const from = draggedAttrIndex.value
+  const to = index
+  if (from !== null && from !== undefined && from !== to) {
+    const item = form.value.attributes.splice(from, 1)[0]
+    form.value.attributes.splice(to, 0, item)
+  }
+  draggedAttrIndex.value = null
+  dragOverAttrIndex.value = null
+}
+
+function onAttrDragEnd() {
+  draggedAttrIndex.value = null
+  dragOverAttrIndex.value = null
+}
+
+const draggedMethodIndex = ref(null)
+const dragOverMethodIndex = ref(null)
+
+function onMethodDragStart(index, event) {
+  draggedMethodIndex.value = index
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', String(index))
+  const rowEl = event.target.closest('.drag-item-row')
+  if (rowEl && event.dataTransfer.setDragImage) {
+    event.dataTransfer.setDragImage(rowEl, 15, 15)
+  }
+}
+
+function onMethodDragOver(index, event) {
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'move'
+  dragOverMethodIndex.value = index
+}
+
+function onMethodDrop(index, event) {
+  event.preventDefault()
+  const from = draggedMethodIndex.value
+  const to = index
+  if (from !== null && from !== undefined && from !== to) {
+    const item = form.value.methods.splice(from, 1)[0]
+    form.value.methods.splice(to, 0, item)
+  }
+  draggedMethodIndex.value = null
+  dragOverMethodIndex.value = null
+}
+
+function onMethodDragEnd() {
+  draggedMethodIndex.value = null
+  dragOverMethodIndex.value = null
+}
+
 let idCounter = 0
 const nextId = () => `node_${++idCounter}`
 
@@ -949,6 +1069,10 @@ function closeModal() {
   showAddClassModal.value = false
   editingNodeId.value = null
   form.value = createEmptyForm()
+  draggedAttrIndex.value = null
+  dragOverAttrIndex.value = null
+  draggedMethodIndex.value = null
+  dragOverMethodIndex.value = null
 }
 
 function deleteNode(id) {
